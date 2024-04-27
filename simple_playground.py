@@ -1,9 +1,11 @@
 import random as r
+import os
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from simple_geometry import *
+import numpy as np
 from PyQt5 import QtWidgets, QtCore
 matplotlib.use('Qt5Agg')
 
@@ -95,6 +97,8 @@ class Playground():
             Line2D(-6, 0, 6, 0),  # start line
             Line2D(0, 0, 0, -3),  # middle line
         ]
+        self.q_table_path = "q_table.npy"  # 修改为 NumPy 文件格式
+        self.load_q_table()
         self.complete = False
         self.previous_state = [0, 0, 0]
         self.current_state = [0, 0, 0]
@@ -112,7 +116,22 @@ class Playground():
         self.car = Car()
         self.reset()
         self.cumulated_reward = 0
-    
+        self.error_count = 0
+    def load_q_table(self):
+        """尝试加载已保存的 Q-table"""
+        if os.path.exists(self.q_table_path):
+            self.q_table = np.load(self.q_table_path, allow_pickle=True).item()
+            print("Loaded Q-table from file.")
+        else:
+            # 初始化 Q-table
+            self.q_table = {
+                "close_left": np.zeros(17),
+                "close_center": np.zeros(17),
+                "close_right": np.zeros(17),
+                "far_left": np.zeros(17),
+                "far_center": np.zeros(17),
+                "far_right": np.zeros(17),
+            }
     def _setDefaultLine(self):
         # print('use default lines')
         # default lines
@@ -132,6 +151,10 @@ class Playground():
         self.car_init_pos = None
         self.car_init_angle = None
 
+    def save_q_table(self):
+        """保存 Q-table 到文件"""
+        np.save(self.q_table_path, self.q_table)
+        print("Q-table saved to file.")
     def _readPathLines(self):
         try:
             with open(self.path_line_filename, 'r', encoding='utf-8') as f:
@@ -309,10 +332,10 @@ class Playground():
         rl_dif = r_dis-l_dist
 
         q_state = ""
-        if f_dis <= 8:
-            q_state += "close_"
-        else:
+        if f_dis >= 12:
             q_state += "far_"
+        else:
+            q_state += "close_"
 
         if rl_dif > 2.5:
             q_state += "right"
@@ -332,21 +355,27 @@ class Playground():
             else:
                 return -10
         if q_state == "close_right":
-            if 40 >= angle > 20:
+            if 40 >= angle > 30:
                 return 7
+            elif 30 >= angle > 25:
+                return 4
+            elif 25>= angle >20:
+                return 3
             elif 20 >= angle > 0:
                 return 2
             else:
                 return -5
         elif q_state == "close_center":
             if 10 > angle > -10:
-                return -3
+                return -4
             else:
                 return 1
         elif q_state == "close_left":
             if 0 > angle >= -20:
                 return 2
-            elif -20 > angle >= -40:
+            elif -20 > angle >= -30:
+                return 3
+            elif -30 > angle >= -40:
                 return 4
             else:
                 return -5
@@ -360,13 +389,15 @@ class Playground():
         elif q_state == "far_center":
             if 10 > angle > -10:
                 return 4
-            elif 20 >= angle >= 10 or -10 >= angle >= -20:
+            elif 20 >= angle >= 10:
+                return -3
+            elif -10 >= angle >= -20:
                 return -3
             else:
-                return -4
+                return -3
         elif q_state == "far_left":
             if 0 > angle > -20:
-                return 1
+                return 2
             elif -20 >= angle >= -40:
                 return -1
             else:
@@ -418,6 +449,12 @@ class Playground():
                 self.update_q_table(self.current_state, self.current_angle,
                                     self.previous_state, self.previous_angle)
                 q_state = self.q_table_state(self.state)
+            
+            # 检查是否结束但未完成
+            if self.done and not self.complete:
+                self.error_count += 1  # 增加错误计数
+            self.save_q_table()    
+        print(f"Training completed with {self.error_count} errors.")
 
     # actual running model(e是e-greedy用的機率)
     def run_simulation(self, e, state):
@@ -571,14 +608,16 @@ class Animation(QtWidgets.QMainWindow):
         msg_box.setText(message)
         msg_box.exec_()
 
-    # 實際顯示整個動畫
+    # 顯示動畫
     def run(self):
         self.show()
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
-    GUI = Animation(Playground())
+    playground = Playground()
+    GUI = Animation(playground)
     GUI.run()
+    QtCore.QTimer.singleShot(100, lambda: playground.q_learning_training(5000, 0.7))   # 訓練 5000 次
     # 啟動 PyQt5 應用程式的事件循環。事件循環是一個無限循環,它會接收並處理來自作業系統的事件，
     # 例如鍵盤輸入、滑鼠移動等。只要應用程式沒有被關閉,事件循環就會一直運行。exec_() 方法會阻
     # 塞主線程,直到應用程式退出為止。
