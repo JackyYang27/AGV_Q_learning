@@ -6,6 +6,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from simple_geometry import *
 import numpy as np
+import matplotlib.patches
 from PyQt5 import QtWidgets, QtCore
 matplotlib.use('Qt5Agg')
 
@@ -97,7 +98,7 @@ class Playground():
             Line2D(-6, 0, 6, 0),  # start line
             Line2D(0, 0, 0, -3),  # middle line
         ]
-        self.q_table_path = "q_table.npy"  # 修改为 NumPy 文件格式
+        self.q_table_path = "q_table.npy"  # 儲存為numpy文件
         self.load_q_table()
         self.complete = False
         self.previous_state = [0, 0, 0]
@@ -117,8 +118,9 @@ class Playground():
         self.reset()
         self.cumulated_reward = 0
         self.error_count = 0
+    
     def load_q_table(self):
-        """尝试加载已保存的 Q-table"""
+        """加載已保存的 Q-table"""
         if os.path.exists(self.q_table_path):
             self.q_table = np.load(self.q_table_path, allow_pickle=True).item()
             print("Loaded Q-table from file.")
@@ -133,8 +135,6 @@ class Playground():
                 "far_right": np.zeros(17),
             }
     def _setDefaultLine(self):
-        # print('use default lines')
-        # default lines
         self.destination_line = Line2D(18, 40, 30, 37)
 
         self.lines = [
@@ -155,6 +155,7 @@ class Playground():
         """保存 Q-table 到文件"""
         np.save(self.q_table_path, self.q_table)
         print("Q-table saved to file.")
+
     def _readPathLines(self):
         try:
             with open(self.path_line_filename, 'r', encoding='utf-8') as f:
@@ -312,11 +313,9 @@ class Playground():
             (self.n_actions-1)
         return angle
 
+    # 使用絕對方向取代相對方向的概念
     def step(self, action=None):
         if action:
-            # 使用絕對方向取代相對方向的概念
-            # E.g.原先方向盤向右轉45度，若下一次向左轉45度
-            # 相對方向:0度向前；絕對方向:向左45度
             self.car.setWheelAngle(action)
 
         if not self.done:
@@ -326,13 +325,13 @@ class Playground():
         else:
             return self.state
 
-    # relationship function
+    # relationship function(設定state)
     def q_table_state(self, car_state):
         f_dist, r_dist, l_dist = car_state
         rl_dif = r_dist-l_dist
 
         q_state = ""
-        if f_dist >= 9:
+        if f_dist >= 10:
             q_state += "far_"
         else:
             q_state += "close_"
@@ -347,7 +346,7 @@ class Playground():
         return q_state
 
 
-    # reward function
+    # reward function(調整後最佳的方法)
     def reward(self, q_state, angle):
         if self.done:
             if self.complete:
@@ -412,7 +411,7 @@ class Playground():
         self.q_table[previous_state][self.angle_to_index(previous_angle)] \
             += + a * (self.reward(current_state, current_angle) + r * max(self.q_table[current_state]) -
                         self.q_table[previous_state][self.angle_to_index(previous_angle)])
-        print(f"Cumulative Reward and Reward: {self.cumulated_reward},{reward}")
+        print(f"Cumulated Reward and Reward: {self.cumulated_reward},{reward}")
         print("Updated Q-Table:", self.q_table)
         if self.complete:
             self.save_q_table()
@@ -424,33 +423,31 @@ class Playground():
     def angle_to_index(self, angle):
         return (angle+40)//5
 
-    # e-greedy algorithm
+    # e-greedy 方法
     def e_greedy(self, e, q_state):
         if r.random() <= e:
             return self.index_to_angle(self.choose_action(q_state))
         else:
             return self.index_to_angle(r.choice([i for i in range(len(self.q_table[q_state]))]))
 
-    # choose the max score
+    # 選擇動作
     def choose_action(self, q_state):
         max_value = max(self.q_table[q_state])
         max_indices = [i for i, v in enumerate(self.q_table[q_state]) if v == max_value]
         return r.choice(max_indices)
 
     # training model
-     # training model
-    def q_learning_training(self, training_time, e):
+    def ql_train(self, training_time, e):
         for i in range(training_time):
             e_train = e * m.exp(-i / training_time)  # Calculate decaying epsilon
             self.run_simulation(e_train)  # Run a full simulation episode
             
             # 检查是否撞牆但未抵達終點
             if not self.complete:
-                self.error_count += 1  # 增加错误计数  
+                self.error_count += 1  # 撞到牆加一
         print(f"Training completed with {self.error_count} errors. Final epsilon: {e_train}")
 
-    
-    # running model(e是e-greedy用的機率)
+    # 模擬
     def run_simulation(self, e):
         self.reset()
         q_state = self.q_table_state(self.state)
@@ -482,9 +479,7 @@ class Playground():
         
 class Animation(QtWidgets.QMainWindow):
     '''
-    play: playground的建立
     state: 當前狀態
-    now_running: 當下程式是否在執行
     QtCore.QTimer: 控制動畫的執行頻率和狀態
     '''
     def __init__(self, play: Playground):
@@ -493,6 +488,7 @@ class Animation(QtWidgets.QMainWindow):
         self.state = self.play.reset()
         self.now_running = False
         self.timer = QtCore.QTimer(self)
+        self.path_points = []
 
         # 建立主視窗
         self.setWindowTitle("操作介面")
@@ -506,39 +502,36 @@ class Animation(QtWidgets.QMainWindow):
         # 停止動畫按鈕
         self.stop_button = QtWidgets.QPushButton("Stop")
         self.stop_button.clicked.connect(self.stop_animation)
+
         # 建立繪畫動畫的區域
-        # 動畫的底板
         self.figure = Figure(figsize=(5, 5))
         self.canvas = FigureCanvas(self.figure)
 
-        # 建立畫面配置
         # 主要畫面
         layout = QtWidgets.QVBoxLayout(self.main_widget)
         layout.addWidget(self.start_button)
         layout.addWidget(self.stop_button)
         layout.addWidget(self.canvas)
 
-        # 事前的背景及變數設定
+        # 背景設定
         self.setup_animation()
 
     def setup_animation(self):
         '''
-        ax: 動畫的畫布
-        background: 動畫背景
         start_line: 起點
-        end_line: 終點
-        car_trail: 車子的移動軌跡
-        direction_line: 顯示車子當前方向的直線
-        text: 當下感測器所偵測到的距離
+        finish_line: 終點
+        car_path: 明確路徑
+        ax: 畫布
+        direction_line: 顯示車子所面向的方向
+        text: 感測器偵測到的距離    
         '''
-
         self.ax = self.figure.add_subplot(111)
         self.background = self.play.lines
         self.start_line = self.play.decorate_lines[0]
-        self.end_line = self.play.destination_line
-        self.car_trail = []
+        self.finish_line = self.play.destination_line
         self.car_radius = self.play.car.radius
-        self.direction_line, = self.ax.plot([], [], 'r-')  # 建立一調指引方向的線
+        self.direction_line, = self.ax.plot([], [], 'r-')  # 建立一條指引方向的線
+        self.car_path, = self.ax.plot([], [], 'g-', linewidth=2)
         self.text = self.ax.text(15, 0, '', fontsize=10)
 
         self.draw_background()
@@ -547,11 +540,11 @@ class Animation(QtWidgets.QMainWindow):
         for line in self.background:
             self.ax.plot([line.p1.x, line.p2.x], [line.p1.y, line.p2.y], "k-")
 
-        # 因為終點是一個矩形，所以需要兩條線
-        self.ax.plot([self.end_line.p1.x, self.end_line.p2.x],
-                     [self.end_line.p1.y, self.end_line.p1.y], "r-")
-        self.ax.plot([self.end_line.p1.x, self.end_line.p2.x],
-                     [self.end_line.p2.y, self.end_line.p2.y], "r-")
+        # 終點的長方形
+        self.ax.plot([self.finish_line.p1.x, self.finish_line.p2.x],
+                     [self.finish_line.p1.y, self.finish_line.p1.y], "r-")
+        self.ax.plot([self.finish_line.p1.x, self.finish_line.p2.x],
+                     [self.finish_line.p2.y, self.finish_line.p2.y], "r-")
 
         # 起點
         self.ax.plot([self.start_line.p1.x, self.start_line.p2.x],
@@ -559,7 +552,7 @@ class Animation(QtWidgets.QMainWindow):
 
         self.ax.axis('equal')
 
-    # 初始化各項變數後開始動畫
+    # 初始化後開始動畫
     def start_animation(self):
         if self.now_running:
             self.timer.stop()
@@ -570,7 +563,7 @@ class Animation(QtWidgets.QMainWindow):
 
         # 更新動畫的函數
         self.timer.timeout.connect(self.update_animation)
-        self.timer.start(50)  # 每 50 毫秒更新一次
+        self.timer.start(40)  
     
     # 停止動畫
     def stop_animation(self):
@@ -581,7 +574,10 @@ class Animation(QtWidgets.QMainWindow):
     # 畫面
     def update_animation(self):
         car_pos = self.play.car.getPosition("center")
+        self.path_points.append((car_pos.x, car_pos.y))
+        self.update_path()
         self.draw_car(car_pos)
+        #更新感測器所得到的文本
         self.text.set_text(
             f'Front sensor: {self.play.state[0]:.{3}f}\n'
             f'Right sensor: {self.play.state[1]:.{3}f}\n'
@@ -591,9 +587,9 @@ class Animation(QtWidgets.QMainWindow):
         # 抵達終點發布成功訊息
         if self.play.done:
             if self.play.complete:
-                self.show_message("Succeeded!")
+                self.show_message("Reach destination!")
             # else:
-            #     self.show_message("Failed!")
+            #     self.show_message("Crash!")
             self.timer.stop()
             self.now_running = False
 
@@ -601,25 +597,29 @@ class Animation(QtWidgets.QMainWindow):
         # 畫出所有移動畫面
         self.canvas.draw()
 
-    # 畫出車子
-    def draw_car(self, car_pos):
-        self.car = plt.Circle((car_pos.x, car_pos.y), self.car_radius, color="green", fill=False)
-        self.ax.add_patch(self.car)
-        self.car_trail.append(self.car)
-        front_sensor = self.play.car.getPosition("front")
-        self.direction_line.set_data([car_pos.x, front_sensor.x], [car_pos.y, front_sensor.y])
-
-    # 再次開始的時候，清理之前的車子移動軌跡
-    def clean(self):
-        for trace in self.ax.patches:
-            trace.remove()
-        self.car_trail = []
-
+    def update_path(self):
+        if self.path_points:
+            x, y = zip(*self.path_points)
+            self.car_path.set_data(x, y)  # 更新路径数据
     # 成功訊息
     def show_message(self, message):
         msg_box = QtWidgets.QMessageBox()
         msg_box.setText(message)
         msg_box.exec_()
+
+    # 畫出車子
+    def draw_car(self, car_pos):
+        self.car = plt.Circle((car_pos.x, car_pos.y), self.car_radius, color="green", fill=False)
+        self.ax.add_patch(self.car)
+        front_sensor = self.play.car.getPosition("front")
+        self.direction_line.set_data([car_pos.x, front_sensor.x], [car_pos.y, front_sensor.y])
+
+    # 清理之前的車子移動軌跡
+    def clean(self):
+        for trace in self.ax.patches:
+            trace.remove()
+        self.path_points.clear()
+        self.car_path.set_data([], [])
 
     # 顯示動畫
     def run(self):
@@ -630,7 +630,7 @@ if __name__ == '__main__':
     playground = Playground()
     GUI = Animation(playground)
     GUI.run()
-    QtCore.QTimer.singleShot(100, lambda: playground.q_learning_training(5000, 0.5))   # 訓練 5000 次
+    QtCore.QTimer.singleShot(100, lambda: playground.ql_train(3000, 0.9))   # 訓練 3000 次
     # 啟動 PyQt5 應用程式的事件循環。
     app.exec_()
 
