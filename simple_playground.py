@@ -328,11 +328,11 @@ class Playground():
 
     # relationship function
     def q_table_state(self, car_state):
-        f_dis, r_dis, l_dist = car_state
-        rl_dif = r_dis-l_dist
+        f_dist, r_dist, l_dist = car_state
+        rl_dif = r_dist-l_dist
 
         q_state = ""
-        if f_dis >= 12:
+        if f_dist >= 9:
             q_state += "far_"
         else:
             q_state += "close_"
@@ -351,32 +351,34 @@ class Playground():
     def reward(self, q_state, angle):
         if self.done:
             if self.complete:
-                return 10
+                return 100
             else:
-                return -10
+                return -100
         if q_state == "close_right":
             if 40 >= angle > 30:
-                return 7
+                return 10
             elif 30 >= angle > 25:
-                return 4
+                return 15
             elif 25>= angle >20:
-                return 3
+                return 10
             elif 20 >= angle > 0:
-                return 2
+                return 5
             else:
-                return -5
+                return -10
         elif q_state == "close_center":
-            if 10 > angle > -10:
-                return -4
+            if 15 > angle > -15:
+                return -20
             else:
-                return 1
+                return 10
         elif q_state == "close_left":
             if 0 > angle >= -20:
-                return 2
-            elif -20 > angle >= -30:
-                return 3
+                return 5
+            elif -20 > angle >= -25:
+                return 10
+            elif -25 > angle >= -30:
+                return 15
             elif -30 > angle >= -40:
-                return 4
+                return 10
             else:
                 return -5
         if q_state == "far_right":
@@ -387,14 +389,14 @@ class Playground():
             else:
                 return -3
         elif q_state == "far_center":
-            if 10 > angle > -10:
+            if 5 > angle > -5:
                 return 4
-            elif 20 >= angle >= 10:
+            elif 20 >= angle >= 5:
                 return -3
-            elif -10 >= angle >= -20:
+            elif -5 >= angle >= -20:
                 return -3
             else:
-                return -3
+                return -4
         elif q_state == "far_left":
             if 0 > angle > -20:
                 return 2
@@ -403,17 +405,18 @@ class Playground():
             else:
                 return -4
 
-
     # update the q_table
     def update_q_table(self, current_state, current_angle, previous_state, previous_angle, a=1, r=1):
         reward = self.reward(current_state, current_angle)
         self.cumulated_reward += reward
         self.q_table[previous_state][self.angle_to_index(previous_angle)] \
             += + a * (self.reward(current_state, current_angle) + r * max(self.q_table[current_state]) -
-                      self.q_table[previous_state][self.angle_to_index(previous_angle)])
+                        self.q_table[previous_state][self.angle_to_index(previous_angle)])
         print(f"Cumulative Reward and Reward: {self.cumulated_reward},{reward}")
         print("Updated Q-Table:", self.q_table)
-    
+        if self.complete:
+            self.save_q_table()
+
     # turning index to wheel angle
     def index_to_angle(self, index):
         return -40+index*5
@@ -435,29 +438,39 @@ class Playground():
         return r.choice(max_indices)
 
     # training model
+     # training model
     def q_learning_training(self, training_time, e):
         for i in range(training_time):
-            state = self.reset()
-            q_state = self.q_table_state(state)
-            e_train = m.exp(-abs(training_time - i + 1)) * e
-            while not self.done:
-                action = self.e_greedy(e_train, q_state)
-                self.previous_state = q_state
-                self.previous_angle = self.car.wheel_angle
-                self.current_state = self.q_table_state(self.step(action))
-                self.current_angle = self.car.wheel_angle
-                self.update_q_table(self.current_state, self.current_angle,
-                                    self.previous_state, self.previous_angle)
-                q_state = self.q_table_state(self.state)
+            e_train = e * m.exp(-i / training_time)  # Calculate decaying epsilon
+            self.run_simulation(e_train)  # Run a full simulation episode
             
-            # 检查是否结束但未完成
-            if self.done and not self.complete:
-                self.error_count += 1  # 增加错误计数
-            self.save_q_table()    
-        print(f"Training completed with {self.error_count} errors.")
+            # 检查是否撞牆但未抵達終點
+            if not self.complete:
+                self.error_count += 1  # 增加错误计数  
+        print(f"Training completed with {self.error_count} errors. Final epsilon: {e_train}")
 
-    # actual running model(e是e-greedy用的機率)
-    def run_simulation(self, e, state):
+    
+    # running model(e是e-greedy用的機率)
+    def run_simulation(self, e):
+        self.reset()
+        q_state = self.q_table_state(self.state)
+        while not self.done:
+            action = self.e_greedy(e, q_state)
+            self.previous_state = q_state
+            self.previous_angle = action
+            self.current_state = self.q_table_state(self.step(action))
+            self.current_angle = self.car.wheel_angle
+            self.update_q_table(self.current_state, self.current_angle,
+                                    self.previous_state, self.previous_angle)
+            q_state = self.current_state
+        # Save the Q-table only if the simulation was successful
+        if self.complete:
+            self.save_q_table()
+            print("Simulation succeeded, Q-table saved.")
+        else:
+            print("Simulation failed, Q-table not saved.")
+    
+    def run(self, e, state):
         q_state = self.q_table_state(state)
         action = self.e_greedy(e, q_state)
         self.previous_state = q_state
@@ -466,7 +479,7 @@ class Playground():
         self.current_angle = self.car.wheel_angle
         self.update_q_table(self.current_state, self.current_angle,
                             self.previous_state, self.previous_angle)
-
+        
 class Animation(QtWidgets.QMainWindow):
     '''
     play: playground的建立
@@ -584,7 +597,7 @@ class Animation(QtWidgets.QMainWindow):
             self.timer.stop()
             self.now_running = False
 
-        self.play.run_simulation(0.7, self.play.state)
+        self.play.run(0.9, self.play.state)
         # 畫出所有移動畫面
         self.canvas.draw()
 
@@ -617,9 +630,7 @@ if __name__ == '__main__':
     playground = Playground()
     GUI = Animation(playground)
     GUI.run()
-    QtCore.QTimer.singleShot(100, lambda: playground.q_learning_training(5000, 0.7))   # 訓練 5000 次
-    # 啟動 PyQt5 應用程式的事件循環。事件循環是一個無限循環,它會接收並處理來自作業系統的事件，
-    # 例如鍵盤輸入、滑鼠移動等。只要應用程式沒有被關閉,事件循環就會一直運行。exec_() 方法會阻
-    # 塞主線程,直到應用程式退出為止。
+    QtCore.QTimer.singleShot(100, lambda: playground.q_learning_training(5000, 0.5))   # 訓練 5000 次
+    # 啟動 PyQt5 應用程式的事件循環。
     app.exec_()
 
