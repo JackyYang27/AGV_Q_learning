@@ -1,3 +1,4 @@
+
 import random as r
 import os
 import matplotlib
@@ -31,7 +32,6 @@ class Car():
     def reset(self):
         self.angle = 90
         self.wheel_angle = 0
-
         xini_range = (self.xini_max - self.xini_min - self.diameter)
         left_xpos = self.xini_min + self.diameter//2
         self.xpos = r.random()*xini_range + left_xpos  # random x pos [-3, 3]
@@ -105,14 +105,17 @@ class Playground():
         self.current_state = [0, 0, 0]
         self.previous_angle = 0
         self.current_angle = 0
-        # 各有17個，因為我以5度為一個單位
+        # 共7種角度
         self.q_table = {
-            "close_left": [0]*17,
-            "close_center": [0]*17,
-            "close_right": [0]*17,
-            "far_left": [0]*17,
-            "far_center": [0]*17,
-            "far_right": [0]*17,
+                "close_left": np.zeros(7),
+                "close_center": np.zeros(7),
+                "close_right": np.zeros(7),
+                "middle_left": np.zeros(7),
+                "middle_center": np.zeros(7),
+                "middle_right": np.zeros(7),
+                "far_left": np.zeros(7),
+                "far_center": np.zeros(7),
+                "far_right": np.zeros(7),
         }
         self.car = Car()
         self.reset()
@@ -127,12 +130,15 @@ class Playground():
         else:
             # 初始化 Q-table
             self.q_table = {
-                "close_left": np.zeros(17),
-                "close_center": np.zeros(17),
-                "close_right": np.zeros(17),
-                "far_left": np.zeros(17),
-                "far_center": np.zeros(17),
-                "far_right": np.zeros(17),
+                "close_left": np.zeros(7),
+                "close_center": np.zeros(7),
+                "close_right": np.zeros(7),
+                "middle_left": np.zeros(7),
+                "middle_center": np.zeros(7),
+                "middle_right": np.zeros(7),
+                "far_left": np.zeros(7),
+                "far_center": np.zeros(7),
+                "far_right": np.zeros(7),
             }
     def _setDefaultLine(self):
         self.destination_line = Line2D(18, 40, 30, 37)
@@ -182,8 +188,8 @@ class Playground():
             self._setDefaultLine()
 
     @property
-    def n_actions(self):  # action = [0~num_angles-1]  17
-        return (self.car.wheel_max - self.car.wheel_min + 1)
+    def n_actions(self):  #7 possible actions
+        return 7
 
     @property
     def observation_shape(self):
@@ -304,16 +310,13 @@ class Playground():
             self.car.setPosition(position)
         if angle:
             self.car.setAngle(angle)
-
         self._checkDoneIntersects()
 
     def calWheelAngleFromAction(self, action):
-        angle = self.car.wheel_min + \
-            action*(self.car.wheel_max-self.car.wheel_min) / \
-            (self.n_actions-1)
-        return angle
+        action_table = [-30, -15, -10, 0, 10, 15, 30]
+        return action_table[action]
 
-    # 使用絕對方向取代相對方向的概念
+
     def step(self, action=None):
         if action:
             self.car.setWheelAngle(action)
@@ -331,11 +334,17 @@ class Playground():
         rl_dif = r_dist-l_dist
 
         q_state = ""
-        if f_dist >= 10:
+        if f_dist >= 9.5:
             q_state += "far_"
+        elif f_dist >= 5:
+            q_state += "middle_"
         else:
             q_state += "close_"
 
+        '''
+        right表示右側有空間
+        left 表示左側有空間
+        '''
         if rl_dif > 2.5:
             q_state += "right"
         elif -2.5 <= rl_dif <= 2.5:
@@ -348,89 +357,48 @@ class Playground():
 
     # reward function(調整後最佳的方法)
     def reward(self, q_state, angle):
+        # 獲取前方、左側、右側的距離
+        right_dist, left_dist, front_dist = self.state
         if self.done:
             if self.complete:
-                return 100
-            else:
-                return -100
-        if q_state == "close_right":
-            if 40 >= angle > 30:
-                return 10
-            elif 30 >= angle > 25:
-                return 15
-            elif 25>= angle >20:
-                return 10
-            elif 20 >= angle > 0:
-                return 5
-            else:
-                return -10
-        elif q_state == "close_center":
-            if 15 > angle > -15:
-                return -20
-            else:
-                return 10
-        elif q_state == "close_left":
-            if 0 > angle >= -20:
-                return 5
-            elif -20 > angle >= -25:
-                return 10
-            elif -25 > angle >= -30:
-                return 15
-            elif -30 > angle >= -40:
-                return 10
-            else:
-                return -5
-        if q_state == "far_right":
-            if 40 >= angle >= 20:
-                return -1
-            elif 20 > angle > 0:
                 return 1
             else:
-                return -3
-        elif q_state == "far_center":
-            if 5 > angle > -5:
-                return 4
-            elif 20 >= angle >= 5:
-                return -3
-            elif -5 >= angle >= -20:
-                return -3
-            else:
-                return -4
-        elif q_state == "far_left":
-            if 0 > angle > -20:
-                return 2
-            elif -20 >= angle >= -40:
                 return -1
-            else:
-                return -4
+        # 如果任何偵測器的距離小於5，則給予輕微懲罰
+        if  right_dist < 5 or left_dist < 5 or front_dist < 4.5:
+            return -0.08
+        return -0.01
 
     # update the q_table
     def update_q_table(self, current_state, current_angle, previous_state, previous_angle, a=1, r=1):
-        reward = self.reward(current_state, current_angle)
-        self.cumulated_reward += reward
-        self.q_table[previous_state][self.angle_to_index(previous_angle)] \
-            += + a * (self.reward(current_state, current_angle) + r * max(self.q_table[current_state]) -
-                        self.q_table[previous_state][self.angle_to_index(previous_angle)])
-        print(f"Cumulated Reward and Reward: {self.cumulated_reward},{reward}")
-        print("Updated Q-Table:", self.q_table)
-        if self.complete:
-            self.save_q_table()
+        if self.done:
+            reward = self.reward(current_state, current_angle)
+            self.cumulated_reward += reward
+            self.q_table[previous_state][self.angle_to_index(previous_angle)] \
+                += + a * (self.reward(current_state, current_angle) + r * max(self.q_table[current_state]) -
+                            self.q_table[previous_state][self.angle_to_index(previous_angle)])
+            print(f"Cumulated Reward and Reward: {self.cumulated_reward},{reward}")
+            print("Updated Q-Table:", self.q_table)
+            if self.complete:
+                self.save_q_table()
 
     # turning index to wheel angle
     def index_to_angle(self, index):
-        return -40+index*5
+        action_table = [-30, -15, -10, 0, 10, 15, 30]
+        return action_table[index]
     # turning wheel angle to index
     def angle_to_index(self, angle):
-        return (angle+40)//5
+        action_table = {-30: 0, -15: 1, -10: 2, 0: 3, 10: 4, 15: 5, 30: 6}
+        return action_table.get(angle, 3)  # 預設返回中間的角度索引
 
     # e-greedy 方法
     def e_greedy(self, e, q_state):
         if r.random() <= e:
-            return self.index_to_angle(self.choose_action(q_state))
+            return self.index_to_angle(r.choice([i for i in range(len(self.q_table[q_state]))])) #隨機選擇
         else:
-            return self.index_to_angle(r.choice([i for i in range(len(self.q_table[q_state]))]))
+            return self.index_to_angle(self.choose_action(q_state)) #選最大Q值
 
-    # 選擇動作
+    # 選擇動作(選最大)
     def choose_action(self, q_state):
         max_value = max(self.q_table[q_state])
         max_indices = [i for i, v in enumerate(self.q_table[q_state]) if v == max_value]
@@ -439,7 +407,7 @@ class Playground():
     # training model
     def ql_train(self, training_time, e):
         for i in range(training_time):
-            e_train = e * m.exp(-i / training_time)  # Calculate decaying epsilon
+            e_train = e * m.exp(-4 *i / training_time)  # Calculate decaying epsilon，4 是 decay factor
             self.run_simulation(e_train)  # Run a full simulation episode
             
             # 检查是否撞牆但未抵達終點
@@ -467,9 +435,11 @@ class Playground():
         else:
             print("Simulation failed, Q-table not saved.")
     
+    # 點擊start的模擬
     def run(self, e, state):
+        self.load_q_table
         q_state = self.q_table_state(state)
-        action = self.e_greedy(e, q_state)
+        action = self.e_greedy(0, q_state) #這邊用0是希望模型最好挑最大值
         self.previous_state = q_state
         self.previous_angle = action
         self.current_state = self.q_table_state(self.step(action))
@@ -493,7 +463,6 @@ class Animation(QtWidgets.QMainWindow):
         # 建立主視窗
         self.setWindowTitle("操作介面")
         self.main_widget = QtWidgets.QWidget(self)
-        # 將主視窗的中間介面設為main_widget
         self.setCentralWidget(self.main_widget)
 
         # 開始動畫按鈕
@@ -503,17 +472,15 @@ class Animation(QtWidgets.QMainWindow):
         self.stop_button = QtWidgets.QPushButton("Stop")
         self.stop_button.clicked.connect(self.stop_animation)
 
-        # 建立繪畫動畫的區域
+        # 建立動畫畫布
         self.figure = Figure(figsize=(5, 5))
         self.canvas = FigureCanvas(self.figure)
 
-        # 主要畫面
+        # 主畫面
         layout = QtWidgets.QVBoxLayout(self.main_widget)
         layout.addWidget(self.start_button)
         layout.addWidget(self.stop_button)
         layout.addWidget(self.canvas)
-
-        # 背景設定
         self.setup_animation()
 
     def setup_animation(self):
@@ -530,7 +497,7 @@ class Animation(QtWidgets.QMainWindow):
         self.start_line = self.play.decorate_lines[0]
         self.finish_line = self.play.destination_line
         self.car_radius = self.play.car.radius
-        self.direction_line, = self.ax.plot([], [], 'r-')  # 建立一條指引方向的線
+        self.direction_line, = self.ax.plot([], [], 'r-')  # 指引方向的線
         self.car_path, = self.ax.plot([], [], 'g-', linewidth=2)
         self.text = self.ax.text(15, 0, '', fontsize=10)
 
@@ -540,15 +507,14 @@ class Animation(QtWidgets.QMainWindow):
         for line in self.background:
             self.ax.plot([line.p1.x, line.p2.x], [line.p1.y, line.p2.y], "k-")
 
+        # 起點
+        self.ax.plot([self.start_line.p1.x, self.start_line.p2.x],
+                     [self.start_line.p1.y, self.start_line.p2.y], "b-")
         # 終點的長方形
         self.ax.plot([self.finish_line.p1.x, self.finish_line.p2.x],
                      [self.finish_line.p1.y, self.finish_line.p1.y], "r-")
         self.ax.plot([self.finish_line.p1.x, self.finish_line.p2.x],
                      [self.finish_line.p2.y, self.finish_line.p2.y], "r-")
-
-        # 起點
-        self.ax.plot([self.start_line.p1.x, self.start_line.p2.x],
-                     [self.start_line.p1.y, self.start_line.p2.y], "b-")
 
         self.ax.axis('equal')
 
@@ -563,7 +529,7 @@ class Animation(QtWidgets.QMainWindow):
 
         # 更新動畫的函數
         self.timer.timeout.connect(self.update_animation)
-        self.timer.start(40)  
+        self.timer.start(50)  
     
     # 停止動畫
     def stop_animation(self):
@@ -584,7 +550,7 @@ class Animation(QtWidgets.QMainWindow):
             f'Left sensor: {self.play.state[2]:.{3}f}'
         )
 
-        # 抵達終點發布成功訊息
+        # 成功訊息
         if self.play.done:
             if self.play.complete:
                 self.show_message("Reach destination!")
@@ -593,15 +559,16 @@ class Animation(QtWidgets.QMainWindow):
             self.timer.stop()
             self.now_running = False
 
-        self.play.run(0.9, self.play.state)
+        self.play.run(0, self.play.state)# 這裡用0來挑最大值
         # 畫出所有移動畫面
         self.canvas.draw()
 
     def update_path(self):
         if self.path_points:
             x, y = zip(*self.path_points)
-            self.car_path.set_data(x, y)  # 更新路径数据
-    # 成功訊息
+            self.car_path.set_data(x, y)  # 更新路徑數據
+
+    # 秀訊息
     def show_message(self, message):
         msg_box = QtWidgets.QMessageBox()
         msg_box.setText(message)
@@ -614,7 +581,7 @@ class Animation(QtWidgets.QMainWindow):
         front_sensor = self.play.car.getPosition("front")
         self.direction_line.set_data([car_pos.x, front_sensor.x], [car_pos.y, front_sensor.y])
 
-    # 清理之前的車子移動軌跡
+    # 清理過去車子移動軌跡
     def clean(self):
         for trace in self.ax.patches:
             trace.remove()
@@ -625,12 +592,12 @@ class Animation(QtWidgets.QMainWindow):
     def run(self):
         self.show()
 
+#主程式
 if __name__ == '__main__':
     app = QtWidgets.QApplication([])
     playground = Playground()
     GUI = Animation(playground)
     GUI.run()
-    QtCore.QTimer.singleShot(100, lambda: playground.ql_train(3000, 0.9))   # 訓練 3000 次
-    # 啟動 PyQt5 應用程式的事件循環。
+    QtCore.QTimer.singleShot(100, lambda: playground.ql_train(2000, 0.99))   # 訓練 2000 次
+    # 啟動 PyQt5 事件循環。
     app.exec_()
-
